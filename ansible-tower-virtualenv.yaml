@@ -1,0 +1,74 @@
+# ansible-playbook -i inventory setup-virtualenv.yml
+- name: Setup Python virtual env
+  hosts: all:!database
+  gather_facts: false
+  tasks:
+  - name: Install python3 and development packages
+    yum:
+      name:
+      - gcc
+      - python3
+      - python3-devel
+      state: latest
+
+  - name: Install system-wide python3 libraries
+    command: >-
+      /usr/bin/pip3 install --upgrade
+      ansible
+      ansible-lint
+      psutil
+      requests
+      selinux
+      yamllint
+
+  - name: Create /opt/python-virtualenv/
+    file:
+      path: /opt/python-virtualenv/
+      state: directory
+
+  - name: Create python3 virtualenv
+    command: python3 -m venv /opt/python-virtualenv/python3
+    args:
+      creates: /opt/python-virtualenv/python3
+
+  - name: Populate python3 virtualenv
+    command: >-
+      /opt/python-virtualenv/python3/bin/pip3 install --upgrade
+      ansible
+      gnureadline
+      openstacksdk
+      psutil
+      python-openstackclient
+      selinux
+
+  - name: Check default status of default virtualenv
+    stat:
+      path: /var/lib/awx/venv/ansible
+    register: r_aws_venv_ansible
+
+  - when: not r_aws_venv_ansible.stat.islnk | default(false)
+    block:
+    - name: Rename default ansible virtual env to /var/lib/awx/venv/ansible.save
+      command: mv /var/lib/awx/venv/ansible /var/lib/awx/venv/ansible.save
+      when: r_aws_venv_ansible.stat.exists
+
+    - name: Create symbolic link from /var/lib/awx/venv/ansible to /opt/python-virtualenv/python3
+      file:
+        src: /opt/python-virtualenv/python3
+        dest: /var/lib/awx/venv/ansible
+        state: link
+
+  - name: Update virtualenv in tower
+    run_once: true
+    delegate_to: localhost
+    uri:
+      url: https://{{ groups.tower[0] }}/api/v2/settings/system/
+      force_basic_auth: yes
+      user: admin
+      password: "{{ admin_password }}"
+      validate_certs: false
+      method: PATCH
+      body_format: json
+      body:
+        CUSTOM_VENV_PATHS:
+        - /opt/python-virtualenv/
